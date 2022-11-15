@@ -1,0 +1,9 @@
+filename = "src/tests/images/vangogh.png"
+pin_count = 250
+pin_radius = 0.95
+line_count = 2000
+
+string_colors = [
+    [0,0,0]
+]
+background_color = [1,1,1]
