@@ -1,15 +1,12 @@
 mod image_module;
 
-
-use std::thread::current;
-
 use image::{Rgb, Rgb32FImage, ImageBuffer, Luma};
-use show-image::{ImageView, ImageInfo, create_window};
+use show_image::{ImageView, ImageInfo, create_window};
 use config::Config;
 use itertools::{Itertools};
 use palette::{Srgb, Lab, IntoColor, Pixel};
 use rand::seq::IteratorRandom;
-use rayon::prelude::*;
+use rayon::{prelude::*, string};
 use rand::{self, Rng};
 
 use line_drawing::XiaolinWu;
@@ -18,8 +15,12 @@ use image_module::img_analysis::{rgb_as_lab, lab_as_rgb, diff_img_to_img};
 use image_module::lines::{line_diff_img_to_col_lab,line_diff_img_to_img_lab};
 
 use crate::image_module::lines::{draw_line_lab};
-use crate::image_module::color_conversion::ImageToPalette;
+use image_module::color_conversion::*;
+use image_module::color_conversion::RgbConversion;
+use image_module::image_io::*;
 
+use std::collections::HashMap;
+use std::hash::Hash;
 /*
 mod lines;
 use std::f32::consts::PI;
@@ -39,22 +40,187 @@ use lines::*;
     xCurrent string map (Lab)
 4) Pin creation
 */
+struct StringSettings
+{
+    size_vals: HashMap<&'static str, usize>,
+    string_vals: HashMap<&'static str, String>,
+    float_vals: HashMap<&'static str, f32>,
+    lab_vals: HashMap<&'static str, Lab>,
+    lab_vec_vals: HashMap<&'static str, Vec<Lab>>
+}
+impl Default for StringSettings
+{
+    fn default() -> Self {
+        return StringSettings {
+            size_vals: HashMap::from([
+                ("pin_count", usize::default()),
+                ("line_count", usize::default())
+            ]),
+            string_vals: HashMap::from([
+                ("in_image_path", String::default()),
+                ("out_image_path", String::default())
+            ]),
+            float_vals: HashMap::from([
+                ("pin_radius", f32::default())
+            ]),
+            lab_vals: HashMap::from([
+                ("bg_color", Lab::default())
+            ]),
+            lab_vec_vals: HashMap::from([
+                ("str_colors", Vec::<Lab>::default())
+            ]),
+        };
+    }
+}
 
+fn read_string_settings(path : &'static str) -> Result<StringSettings, String>
+{
+    let mut ss: StringSettings = StringSettings::default();
+    let binder = Config::builder()
+        .add_source(config::File::with_name(path))
+        .build();
+    match binder
+    {
+        Ok(cfg) =>
+        {
+            for (key, val) in ss.size_vals.iter_mut()
+            {
+                match cfg.get_int(key)
+                {
+                    Ok(i) => *val = i as usize,
+                    Err(e) => return Err(e.to_string())
+                }
+            }
+            for (key, val) in ss.string_vals.iter_mut()
+            {
+                match cfg.get_string(key)
+                {
+                    Ok(s) => *val = s,
+                    Err(e) => return Err(e.to_string())
+                }
+            }
+            for(key, val) in ss.float_vals.iter_mut()
+            {
+                match cfg.get_float(key)
+                {
+                    Ok(f) => *val = f as f32,
+                    Err(e) => return Err(e.to_string())
+                }
+            }
+            for(key, val) in ss.lab_vals.iter_mut()
+            {
+                match cfg.get::<config::Value>(key)
+                {
+                    Ok(c) => 
+                    {
+                        match parse_lab_color(&c)
+                        {
+                            Ok(color) => *val = color,
+                            Err(e) => return Err(e.to_string())
+                        }
+                    }
+                    Err(e) => return Err(e.to_string())
+                }
+            }
+            for(key, val) in ss.lab_vec_vals.iter_mut()
+            {
+                match cfg.get_array(key)
+                {
+                    Ok(v) => 
+                    {
+                        match parse_lab_colors(&v)
+                        {
+                            Ok(color_vec) => *val = color_vec,
+                            Err(e) => return Err(e.to_string())
+                        }
+                    }
+                    Err(e) => return Err(e.to_string())
+                }
+            }
+            return Ok(ss);
+        },
+        Err(e) => 
+        {
+            return Err(e.to_string());
+        }
+    }
+    fn parse_lab_colors(val_vec: &Vec<config::Value>) -> Result<Vec<Lab>, String>
+    {
+        let mut col_vec: Vec<Lab> = vec![Lab::new(0.,0.,0.);val_vec.len()];
+        for i in 0..val_vec.len()
+        {
+            match parse_lab_color(&val_vec[i])
+            {
+                Ok(c) => col_vec[i] = c,
+                Err(e) => return Err(e)
+            }
+        }
+        return Ok(col_vec);
+    }
+
+    fn parse_lab_color(s_color_rgb: &config::Value) -> Result<Lab, String>
+    {
+        match parse_rgb_color(s_color_rgb)
+        {
+            Ok(rgb) => return Ok(rgb.into_color()),
+            Err(e) => return Err(e.to_string())
+        };
+    }
+
+    fn parse_rgb_color(s_color: &config::Value) -> Result<Srgb, String>
+    {
+        match s_color.clone().into_array()
+        {
+            Ok(c_arr) => 
+            {
+                let res_r = c_arr[0].clone().into_float();
+                let res_g = c_arr[0].clone().into_float();
+                let res_b = c_arr[2].clone().into_float();
+                if res_r.is_ok() && res_g.is_ok() && res_b.is_ok()
+                {
+                    return Ok(Srgb::new(
+                        res_r.unwrap() as f32,
+                        res_g.unwrap() as f32,
+                        res_b.unwrap() as f32
+                    ));
+                }
+                return Err("Rgb color is improperly formatted".to_string());
+            }
+            Err(e) => return Err(e.to_string())
+        }
+    }
+    
+}
+
+fn main()
+{
+    let settings = read_string_settings("src/tests/settings");
+    if settings.is_err()
+    {
+        println!("{:?}", settings.err());
+    }
+    else
+    {
+        let settings = settings.unwrap();
+        let bg = settings.lab_vals.get("bg_color").unwrap();
+        println!("Success! \nColors: {:?} \nBG Color: {:?}", settings.lab_vec_vals.get("str_colors"), bg);
+    }
+}
+
+/*
 fn main()
 {
     let settings = Config::builder()
         .add_source(config::File::with_name("src/tests/settings.toml"))
         .build()
         .unwrap();
-    let lab_image = image::open(&settings.get_string("filename").unwrap())
-        .unwrap()//image::DynamicImage::ImageRgb32F(open_lab(&settings.get_string("filename").unwrap()))
-        .resize(2048,2048, image::imageops::Nearest)
-        .into_rgb32f();
-    let lab_image = rgb_as_lab(&lab_image);
-    image::DynamicImage::ImageRgb32F(lab_as_rgb(&lab_image))
-        .into_rgb8()
-        .save("src/tests/images/lab_img.png")
-        .unwrap(); 
+
+    let in_image_path = settings.get_string("filename").unwrap();
+    let mut lab_image = open_lab(&in_image_path);
+    //image::DynamicImage::ImageRgb32F(lab_image.as_rgb())
+    //    .into_rgb8()
+    //    .save("src/tests/images/lab_img.png")
+    //    .unwrap(); 
     let str_colors = parse_settings_lab_color_array(&settings.get("string_colors").unwrap());
     let bg_color= parse_settings_lab_color(&settings.get("background_color").unwrap());
     let pin_count = settings.get_int("pin_count").unwrap() as usize;
@@ -63,7 +229,6 @@ fn main()
 
     let mut str_img = Rgb32FImage::new(lab_image.width(), lab_image.height());
     str_img.pixels_mut().for_each(|p|{p[0] = bg_color.l; p[1] = bg_color.a; p[2] = bg_color.b});
-    //let _diff_img = diff_img_to_img(&lab_image, &str_img);
 
     let pins = pin_circle(pin_count, lab_image.dimensions(), pin_radius);
     let pin_combos = (0..pin_count).tuple_combinations::<(_,_)>().collect_vec();
@@ -75,7 +240,6 @@ fn main()
         }).collect_vec();
     let mut cur_pin: usize = 0;
     let mut score : f32 = 0.;
-    println!("{line_count}");
     let mut path: Vec<usize> = Vec::with_capacity(line_count);
     path.resize(line_count, 0);
     path[0] = cur_pin;
@@ -87,20 +251,11 @@ fn main()
         cur_pin = next_pin;
         path[i] = cur_pin;
     }
-
-    image::DynamicImage::ImageRgb32F(lab_as_rgb(&str_img))
-        .into_rgb8()
-        .save("src/tests/images/str_img.png")
-        .unwrap(); 
-    let path_vis = visualize_string_img(&path, &pins, lab_image.dimensions()).into_raw();
-    let mut buf : [u16; 2048*2048];
-    for (i,b) in path_vis.iter().enumerate()
-    {
-        buf[i] = *b;
-    }
-    image::save_buffer("src/tests/images/path_vis.png", &buf, path_vis.width(), path_vis.height(), image::ColorType::L16);
-
+    save_lab("src/tests/images/vg_copy.png", &lab_image).unwrap();
+    save_lab("src/tests/images/str_img.png",&str_img).unwrap();
+ 
 }
+*/
 
 fn visualize_string_img(path: &Vec<usize>, pins: &Vec<(f32,f32)>, dimensions : (u32, u32)) -> ImageBuffer<Luma<u16>, Vec<u16>>
 {
@@ -114,7 +269,7 @@ fn visualize_string_img(path: &Vec<usize>, pins: &Vec<(f32,f32)>, dimensions : (
         xiao.for_each(|((x,y), value)| 
         {
             let p = img.get_pixel_mut(x as u32,y as u32);
-            if(p[0] == 0) {p[0] = i as u16};
+            if p[0] == 0 {p[0] = i as u16};
         });
     }
     return img;
@@ -164,48 +319,6 @@ fn open_lab(filename: &String) -> image::ImageBuffer<Rgb<f32>, Vec<f32>>
     return rgb_as_lab(&rgb_image);
 }
 
-fn parse_settings_lab_color_array(s_colors_rgb: &config::Value) -> Vec<Lab>
-{
-    let rgb_colors = parse_settings_color_array(s_colors_rgb);
-    let mut lab_colors: Vec<Lab> = vec![Lab::new(0.,0.,0.); rgb_colors.len()];
-    for i in 0..lab_colors.len()
-    {
-        lab_colors[i] = rgb_colors[i].as_lab();
-    }
-    return lab_colors;
-}
-
-fn parse_settings_lab_color(s_color_rgb: &config::Value) -> Lab
-{
-    let rgb_color: Srgb = parse_settings_color(s_color_rgb);
-    return  rgb_color.into_color();
-}
-
-fn parse_settings_color_array(s_colors: &config::Value) -> Vec<Srgb>
-{
-    let s_colors = s_colors
-        .clone()
-        .into_array()
-        .unwrap();
-    let mut colors = vec![Srgb::new(0.,0.,0.); s_colors.len()];
-
-    for (index, s_color) in s_colors.iter().enumerate()
-    {
-        colors[index] = parse_settings_color(s_color);
-    }
-    return colors;
-}
-
-fn parse_settings_color(s_color: &config::Value) -> Srgb
-{
-    let c_arr = s_color.clone().into_array().unwrap();
-    let color = Srgb::new(
-        c_arr[0].clone().into_float().unwrap() as f32,
-        c_arr[1].clone().into_float().unwrap() as f32,
-        c_arr[2].clone().into_float().unwrap() as f32,
-    );
-    return color;
-}
 
 /*
 fn main()

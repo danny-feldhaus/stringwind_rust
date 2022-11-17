@@ -2,7 +2,7 @@ use image::{Rgb32FImage,ImageBuffer,Rgb, Luma};
 use rayon::{prelude::*};
 use palette::{IntoColor, Lab, Srgb};
 
-use super::color_conversion::*;
+use super::color_conversion::{PaletteToImage, ImageConversion};
 
 pub fn dist_3d(a: &[f32], b: &[f32]) -> f32
 {
@@ -73,10 +73,9 @@ pub fn diff_img_to_img(image_a : &Rgb32FImage, image_b : &Rgb32FImage) -> ImageB
     let image_b_iter = image_b.par_chunks(3);
     let zip_iter = (image_a_iter.zip(image_b_iter)).zip(diff_iter);
     zip_iter.for_each(|((p_a, p_b), p_diff)| 
-        {
-            *(p_diff) = dist_3d(p_a, p_b)
-        }
-    );
+    {
+        *(p_diff) = dist_3d(p_a, p_b)
+    });
     return diff;
 }
 
@@ -88,11 +87,10 @@ pub fn rgb_as_lab(rgb_image : &Rgb32FImage) -> Rgb32FImage
     let zip_iter = lab_chunks.zip(rgb_chunks);
     zip_iter.for_each(|(p_lab, p_rgb)|
     {
-        let cs_lab : Lab = p_rgb.as_lab();
+        let cs_lab : Lab = Srgb::new(p_rgb[0], p_rgb[1], p_rgb[2]).into_color();
         p_lab[0] = cs_lab.l;
         p_lab[1] = cs_lab.a;
         p_lab[2] = cs_lab.b;
-        //println!("Rgb{:?}->Lab{:?}", p_rgb, p_lab);
     });
     return lab_image;
 }
@@ -105,11 +103,10 @@ pub fn lab_as_rgb(lab_image : &Rgb32FImage) -> Rgb32FImage
     let zip_iter = rgb_chunks.zip(lab_chunks);
     zip_iter.for_each(|(p_rgb, p_lab)|
     {
-        let cs_rgb : Srgb = p_lab.lab_as_lab().as_srgb();//Srgb::new(p_rgb[0], p_rgb[1], p_rgb[2]).into_color();
+        let cs_rgb : Srgb = Lab::new(p_rgb[0], p_rgb[1], p_rgb[2]).into_color();
         p_rgb[0] = cs_rgb.red;
         p_rgb[1] = cs_rgb.green;
         p_rgb[2] = cs_rgb.blue;
-        //println!("Lab{:?}->Rgb{:?}", p_lab, p_rgb);
     });
     return rgb_image;
 }

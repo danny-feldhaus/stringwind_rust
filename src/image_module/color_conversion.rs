@@ -1,88 +1,148 @@
-use image::{Rgb};
+use image::{Rgb,ImageBuffer};
 use palette::{IntoColor, Srgb, Lab};
+use rayon::{prelude::ParallelSliceMut, iter::ParallelIterator};
 
-pub trait ImageToPalette
+pub enum ColorSpace
 {
-    fn as_srgb(&self) -> Srgb;
-    fn as_lab(&self) -> Lab;
-    fn lab_as_lab(&self) -> Lab;
-    fn as_rgb(&self) -> Rgb<f32>;
+    Srgb, Lab
 }
 
-impl ImageToPalette for Rgb<f32>
+pub trait ImageConversion
 {
-    fn as_srgb(&self) -> Srgb<f32>
-    {
-        return Srgb::from_components((self[0], self[1], self[2]));
-    }
-    fn as_lab(&self) -> Lab
-    {
-        return self.as_srgb().into_color();
-    }
-    fn as_rgb(&self) -> Rgb<f32>
-    {
-        return *self;
-    }
-    fn lab_as_lab(&self) -> Lab {
-        return Lab::from_components((self[0], self[1], self[2]));
-    }
+    fn into_lab(&mut self) -> &ImageBuffer<Rgb<f32>, Vec<f32>>;
+    fn into_rgb(&mut self) -> &ImageBuffer<Rgb<f32>, Vec<f32>>;
+    fn as_lab(&self) -> ImageBuffer<Rgb<f32>, Vec<f32>>;
+    fn as_rgb(&self) -> ImageBuffer<Rgb<f32>, Vec<f32>>;
 }
 
-impl ImageToPalette for Srgb<f32>
+impl ImageConversion for ImageBuffer<Rgb<f32>, Vec<f32>>
 {
-    fn as_srgb(&self) -> Srgb<f32>
+    fn into_lab(&mut self) -> &ImageBuffer<Rgb<f32>, Vec<f32>>
     {
-        return *self;
+        self.par_chunks_mut(3).for_each(|p|
+            {
+                let lab: Lab = Srgb::new(p[0], p[1], p[2]).into_color();
+                p[0] = lab.l;
+                p[1] = lab.a;
+                p[2] = lab.b;
+            });
+        return self;
     }
-    fn as_lab(&self) -> Lab
+    fn into_rgb(&mut self) -> &ImageBuffer<Rgb<f32>, Vec<f32>>
     {
-        return (*self).into_color();
+        self.par_chunks_mut(3).for_each(|p|
+            {
+                let srgb: Srgb = Lab::new(p[0], p[1], p[2]).into_color();
+                p[0] = srgb.red;
+                p[1] = srgb.green;
+                p[2] = srgb.blue;
+            });
+        return self;
     }
-    fn as_rgb(&self) -> Rgb<f32>
+    fn as_lab(&self) -> ImageBuffer<Rgb<f32>, Vec<f32>>
     {
-        return Rgb([self.red, self.green, self.blue]);
+        let mut img = self.clone();
+        img.par_chunks_mut(3).for_each(|p|
+            {
+                let lab: Lab = Srgb::new(p[0], p[1], p[2]).into_color();
+                p[0] = lab.l;
+                p[1] = lab.a;
+                p[2] = lab.b;
+            });
+        return img;
     }
-    //This shouldn't need to be used, because Srgb should intrinsically contain Srgb data
-    fn lab_as_lab(&self) -> Lab {
-        return Lab::from_components((self.red, self.green, self.blue));
-    }
-}
-
-impl ImageToPalette for Lab
-{
-    fn as_srgb(&self) -> Srgb<f32>
+    fn as_rgb(&self) -> ImageBuffer<Rgb<f32>, Vec<f32>>
     {
-        return (*self).into_color();
-    }
-    fn as_lab(&self) -> Lab
-    {
-        return *self;
-    }
-    fn as_rgb(&self) -> Rgb<f32>
-    {
-        let srgb : Srgb = self.as_srgb();
-        return Rgb([srgb.red, srgb.green, srgb.blue]);
-    }
-    fn lab_as_lab(&self) -> Lab {
-        return *self;
+        let mut img = self.clone();
+        img.par_chunks_mut(3).for_each(|p|
+            {
+                let srgb: Srgb = Lab::new(p[0], p[1], p[2]).into_color();
+                p[0] = srgb.red;
+                p[1] = srgb.green;
+                p[2] = srgb.blue;
+            });
+        return img;
     }
 }
 
-impl ImageToPalette for &[f32]
+pub trait RgbConversion
 {
-    fn as_srgb(&self) -> Srgb<f32>
+    fn as_lab(&self, in_color_space: &ColorSpace ) -> Lab;
+    fn as_srgb(&self, in_color_space: &ColorSpace ) -> Srgb;
+}
+
+impl RgbConversion for Rgb<f32>
+{
+    fn as_lab(&self, in_color_space: &ColorSpace) -> Lab
     {
-        return Srgb::from_components((self[0], self[1], self[2]));
+        match in_color_space
+        {
+            ColorSpace::Srgb => 
+            {
+                return Srgb::new(self[0], self[1], self[2]).into_color();
+            }
+            ColorSpace::Lab =>
+            {
+                return Lab::new(self[0], self[1], self[2]);
+            }
+        }
     }
-    fn as_lab(&self) -> Lab
+    fn as_srgb(&self, in_color_space: &ColorSpace) -> Srgb
     {
-        return self.as_srgb().into_color();
+        match in_color_space
+        {
+            ColorSpace::Srgb => 
+            {
+                return Srgb::new(self[0], self[1], self[2]);
+            }
+            ColorSpace::Lab =>
+            {
+                return Lab::new(self[0], self[1], self[2]).into_color();
+            }
+        }
     }
-    fn as_rgb(&self) -> Rgb<f32>
+}
+
+
+pub trait PaletteToImage
+{
+    fn to_rgb(&self, out_color_space: ColorSpace) -> Rgb<f32>;
+}
+
+impl PaletteToImage for Lab
+{
+    fn to_rgb(&self, out_color_space: ColorSpace) -> Rgb<f32>
     {
-        return Rgb([self[0], self[1], self[2]]);
+        match out_color_space
+        {
+            ColorSpace::Srgb => 
+            {
+                let srgb: Srgb = self.clone().into_color();
+                return Rgb([srgb.red, srgb.green, srgb.blue]);
+            }
+            ColorSpace::Lab =>
+            {
+                return Rgb([self.l, self.a, self.b]);
+            }
+        }
     }
-    fn lab_as_lab(&self) -> Lab {
-        return Lab::from_components((self[0], self[1], self[2]));
+}
+
+impl PaletteToImage for Srgb
+{
+    fn to_rgb(&self, out_color_space: ColorSpace) -> Rgb<f32>
+    {
+        match out_color_space
+        {
+            ColorSpace::Srgb => 
+            {
+                return Rgb([self.red, self.green, self.blue]);
+            }
+            ColorSpace::Lab =>
+            {
+                let lab: Lab = self.clone().into_color();
+                return Rgb([lab.l, lab.a, lab.b]);
+            }
+        }
     }
 }

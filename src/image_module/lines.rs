@@ -3,6 +3,7 @@ use rayon::{prelude::*};
 use line_drawing::XiaolinWu;
 use lerp::Lerp;
 use palette::{Lab};
+use show_image::Color;
 
 use super::color_conversion::*;
 
@@ -46,16 +47,13 @@ pub fn draw_line_lab(point_a: (f32, f32), point_b: (f32, f32), image: &mut Rgb32
 }
 
 //pub fn draw_line_img_col_difference(point_a: (f32, f32), point_b: (f32, f32), diff_image: &mut &ImageBuffer<Luma<f32>,Vec<f32>>, rgb_image: &Rgb32FImage,  color: Rgb<f32>)
-pub fn line_diff_img_to_col(point_a: (f32, f32), point_b: (f32, f32), image: &Rgb32FImage, color: Rgb<f32>, is_lab: bool) -> f32
+pub fn line_diff_img_to_col(point_a: (f32, f32), point_b: (f32, f32), image: &Rgb32FImage, color: Rgb<f32>, in_color_space: ColorSpace) -> f32
 {
     let xiao: Vec<((i32,i32), f32)> = XiaolinWu::<f32, i32>::new(point_a, point_b).collect();
-    let color_lab: Lab = if is_lab {color.lab_as_lab()} else {color.as_lab()};
+    let color_lab: Lab = color.as_lab(&in_color_space);
     let sum : (f32,f32) = xiao.par_iter().fold(|| (0.,0.), |a: (f32, f32), ((x,y), value)|
     {   
-        let pixel_lab: Lab = {
-            if is_lab {image.get_pixel(*x as u32,*y as u32).lab_as_lab()}
-            else      {image.get_pixel(*x as u32,*y as u32).as_lab()}
-        };
+        let pixel_lab: Lab = image.get_pixel(*x as u32,*y as u32).as_lab(&in_color_space);
         let d = {
             let ldiff = pixel_lab - color_lab; 
             (ldiff.l*ldiff.l + ldiff.a*ldiff.a + ldiff.b*ldiff.b).sqrt()
@@ -72,7 +70,7 @@ pub fn line_diff_img_to_col_lab(point_a: (f32, f32), point_b: (f32, f32), image:
     let xiao: Vec<((i32,i32), f32)> = XiaolinWu::<f32, i32>::new(point_a, point_b).collect();
     let sum : (f32,f32) = xiao.par_iter().fold(|| (0.,0.), |a: (f32, f32), ((x,y), value)|
     {   
-        let pixel_lab : Lab = (*image.get_pixel(*x as u32,*y as u32)).lab_as_lab();
+        let pixel_lab : Lab = (*image.get_pixel(*x as u32,*y as u32)).as_lab(&ColorSpace::Lab);
         let d = {
             let ldiff = pixel_lab - color_lab; 
             (ldiff.l*ldiff.l + ldiff.a*ldiff.a + ldiff.b*ldiff.b).sqrt()
@@ -87,8 +85,8 @@ pub fn line_diff_img_to_img_lab(point_a: (f32, f32), point_b: (f32, f32), image_
     let xiao: Vec<((i32,i32), f32)> = XiaolinWu::<f32, i32>::new(point_a, point_b).collect();
     let sum : (f32,f32) = xiao.par_iter().fold(|| (0.,0.), |a: (f32, f32), ((x,y), value)|
     {   
-        let pixel_a : Lab = (*image_a.get_pixel(*x as u32,*y as u32)).lab_as_lab();
-        let pixel_b : Lab = (*image_b.get_pixel(*x as u32,*y as u32)).lab_as_lab();
+        let pixel_a : Lab = (*image_a.get_pixel(*x as u32,*y as u32)).as_lab(&ColorSpace::Lab);
+        let pixel_b : Lab = (*image_b.get_pixel(*x as u32,*y as u32)).as_lab(&ColorSpace::Lab);
         let d = {
             let ldiff = pixel_a - pixel_b; 
             (ldiff.l*ldiff.l + ldiff.a*ldiff.a + ldiff.b*ldiff.b).sqrt()

@@ -4,11 +4,40 @@ extern crate test;
 use std::f32::consts::PI;
 use image::{ImageBuffer,Rgb};
 use test::Bencher;
+
 mod image_module;
-
-
 use image_module::img_analysis::*;
 use image_module::lines::*;
+use image_module::color_conversion::ColorSpace;
+use image_module::image_io::{read_lab, save_lab};
+#[test]
+fn open_and_save_lab() 
+{
+    assert!(true);
+    let open_binder = read_lab("src/tests/images/vangogh.png");
+    match open_binder
+    {
+        Ok(lab_img) =>
+        {
+            let save_binder = save_lab("src/tests/images/vangogh_resaved_lab.png", &lab_img);
+            match save_binder 
+            {
+                Ok(_s) => assert!(true),
+                Err(e) => 
+                {
+                    println!("{:?}", e);
+                    assert!(false);
+                }
+            }
+        },
+        Err(e) => 
+        {
+            println!("{:?}", e);
+            assert!(false);
+        }
+    };
+}
+
 #[bench]
 fn b_avg_img_to_col(b: &mut Bencher)
 {
@@ -67,7 +96,7 @@ fn b_line_comparison_lab(b: &mut Bencher)
     b.iter(|| {
             for i in 1..pin_count
             {
-                line_diff_img_to_col(pins[0], pins[i], &lab_image, image::Rgb([0.,0.,0.]), true);
+                line_diff_img_to_col(pins[0], pins[i], &lab_image, image::Rgb([0.,0.,0.]), ColorSpace::Lab);
             }
         }
     );
@@ -90,7 +119,7 @@ fn b_line_comparison_rgb(b: &mut Bencher)
     b.iter(|| {
         for i in 1..pin_count
         {
-            line_diff_img_to_col(pins[0], pins[i], &image, image::Rgb([0.,0.,0.]), false);
+            line_diff_img_to_col(pins[0], pins[i], &image, image::Rgb([0.,0.,0.]), ColorSpace::Lab);
         }
     });
 }
