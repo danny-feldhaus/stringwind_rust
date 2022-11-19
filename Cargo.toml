@@ -16,6 +16,7 @@ geo = "0.23.0"
 config = "0.13.1"
 rand = "0.8.5"
 show-image = "0.13.1"
+log = "0.4.17"
 
 [profile.dev]
 opt-level=1
@@ -25,3 +26,6 @@ debug=true
 [profile.release]
 debug = true
 opt-level = 3
+
+[features]
+cielab_difference = []

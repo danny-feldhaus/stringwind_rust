@@ -2,6 +2,7 @@ use image::{Rgb,ImageBuffer};
 use palette::{IntoColor, Srgb, Lab};
 use rayon::{prelude::ParallelSliceMut, iter::ParallelIterator};
 
+#[allow(dead_code)]
 pub enum ColorSpace
 {
     Srgb, Lab
@@ -144,5 +145,35 @@ impl PaletteToImage for Srgb
                 return Rgb([lab.l, lab.a, lab.b]);
             }
         }
+    }
+}
+
+pub trait LabDifference
+{
+    fn difference_from(&self, other: &Lab) -> f32;
+    fn similarity_to(&self, other: &Lab) -> f32;
+}
+
+//Implements a color difference algorithm based on compile-time ettings.
+impl LabDifference for Lab
+{
+    fn difference_from(&self, other: &Lab) -> f32 {
+        const MAX_DIFF : f32 = 374.232548023; //maximum difference between two Lab colors
+        //Use palette's built-in difference function. 
+        //  Preliminary tests show that this algorithm is a lot slower, and potentially results in less detail. More testing needed.
+        #[cfg(feature = "cielab_difference")] 
+        {
+            return self.get_color_difference(other) / max_diff;
+        }
+        //Use linear euclidean distance between Lab colors.
+        //  Currently seems like the best option.
+        #[cfg(not(feature = "cielab_difference"))]
+        {
+            let diff = *self - *other;
+            return (diff.l*diff.l + diff.a*diff.a + diff.b*diff.b).sqrt() / MAX_DIFF;
+        }
+    }
+    fn similarity_to(&self, other: &Lab) -> f32 {
+        1.0 - self.difference_from(other)
     }
 }

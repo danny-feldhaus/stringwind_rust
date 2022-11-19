@@ -2176,6 +2176,7 @@ dependencies = [
  "itertools",
  "lerp",
  "line_drawing",
+ "log",
  "palette",
  "rand",
  "rayon",
