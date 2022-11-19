@@ -1,20 +1,22 @@
-use crate::image_module::color_conversion::{RgbConversion, LabDifference};
+use crate::image_module::color_conversion::{RgbConversion, LabDifference, ImageConversion};
 use crate::image_module::lines::draw_line_lab;
 
 use super::image_module::image_io::{read_lab,save_lab};
 use super::image_module::color_conversion::{ColorSpace, PaletteToImage};
 use super::string_setting::*;
 
-use image:: {Rgb32FImage, ImageResult};
+use image:: {Rgb32FImage, ImageResult, EncodableLayout, DynamicImage};
 use itertools::Itertools;
 use palette::{Lab, Mix};
 use std::collections::HashMap;
 use line_drawing::XiaolinWu;
+use show_image::{ImageView, ImageInfo, create_window};
 pub struct PathStep
 {
     pub from_idx : usize,
     pub to_idx : usize,
-    pub color_idx : usize
+    pub color_idx : usize,
+    pub score : f32
 }
 
 pub struct StringPath
@@ -30,7 +32,8 @@ pub struct StringPath
     combo_scores : Vec<HashMap<(usize,usize), f32>>,
     strings_drawn : Rgb32FImage,
     cur_step : usize,
-    cur_idxs : Vec<usize>
+    cur_idxs : Vec<usize>,
+    edge_weight : f32
 }
 
 impl Default for StringPath
@@ -48,7 +51,8 @@ impl Default for StringPath
             combo_scores: Vec::<HashMap<(usize,usize), f32>>::default(), 
             strings_drawn: Rgb32FImage::default(),
             cur_step: 0,
-            cur_idxs : Vec::default()
+            cur_idxs : Vec::default(),
+            edge_weight : 0.
         }
     }
 }
@@ -61,9 +65,17 @@ impl StringPath
 
         let pin_count = *settings.get::<usize>("pin_count")?;
         let path_length = *settings.get::<usize>("line_count")?;
+        let width = *settings.get::<usize>("width")? as u32;
+        let height = *settings.get::<usize>("height")? as u32;
+
+
         let binder = read_lab(settings.get::<String>("in_image_path")?);
         if binder.is_err()  {return Err(binder.is_err().to_string())}
-        let input_image = binder.unwrap(); 
+        let input_image = image::imageops::resize::<Rgb32FImage>(
+            &binder.unwrap(), 
+            width,
+            height,
+            image::imageops::FilterType::Nearest); 
         let output_path = settings.get::<String>("out_image_path")?.clone();
         let dimensions = input_image.dimensions();
         //Make pins
@@ -72,6 +84,7 @@ impl StringPath
         //Make combo scores iterator
 
         let cur_idxs = vec![0;colors.len()];
+        let edge_weight = *settings.get::<f32>("edge_weight")?;
         let mut sp = StringPath
         {
             path: Vec::new(),
@@ -84,62 +97,70 @@ impl StringPath
             combo_scores : Vec::<HashMap<(usize,usize), f32>>::default(),
             strings_drawn,
             cur_step: 0,
-            cur_idxs
+            cur_idxs,
+            edge_weight
         };
         sp.calculate_initial_scores();
 
         Ok(sp)
     }
 
-    fn step(&mut self) -> bool
-    {
-        self.cur_step+= 1;
-        if self.cur_step == self.path_length {return false};
-        let next_step = self.best_step();
-        self.cur_idxs[next_step.color_idx] = next_step.to_idx;
-        let from_coord = self.pin_positions[next_step.from_idx];
-        let to_coord = self.pin_positions[next_step.to_idx];
-        draw_line_lab(from_coord,to_coord, &mut self.strings_drawn, &self.colors[next_step.color_idx]);
-        self.path.push(next_step);
-
-        return true;
-    }
-
-    pub fn best_step(&self) -> PathStep
-    {
-        let mut best = PathStep
-        {
-            from_idx : 0,
-            to_idx : 0,
-            color_idx : 0
-        };
-        let mut best_score = f32::MIN;
-
-        for (color_idx, from_idx) in self.cur_idxs.iter().enumerate()
-        {
-            let combos: &HashMap<_,_> = &self.combo_scores[color_idx];
-            combos.iter()
-                .filter(|((a,b), _score)| a == from_idx || b == from_idx)
-                .for_each(|((pin_a_idx, pin_b_idx), line_score)|{
-                    let score = *line_score -  self.current_similarity(*pin_a_idx,*pin_b_idx);
-                    if score > best_score
-                    {
-                        best_score = score;
-                        best.from_idx = *from_idx;
-                        best.to_idx = if *pin_a_idx == *from_idx {*pin_b_idx} else {*pin_a_idx};
-                        best.color_idx = color_idx;
-                    }
-                });
-        }   
-        best
-    }
-
+    //Save a visual representation of the current path
     pub fn save_visual(&self) -> ImageResult<()>
     {
         save_lab(&(self.output_path.clone() + "visual.png"), &self.strings_drawn)
     } 
 
-    //Calculate the potential score for each pin combinatio and color
+    //Add a step to the path
+    fn step(&mut self) -> bool
+    {
+        self.cur_step+= 1;
+        if self.cur_step == self.path_length {return false};
+        let next_step = self.get_best_step();
+        self.cur_idxs[next_step.color_idx] = next_step.to_idx;
+        let from_coord = self.pin_positions[next_step.from_idx];
+        let to_coord = self.pin_positions[next_step.to_idx];
+        draw_line_lab(from_coord,to_coord, &mut self.strings_drawn, &self.colors[next_step.color_idx]);
+        self.path.push(next_step);
+        true
+    }
+
+    //Calculate tehe color / pin combination with the best score
+    pub fn get_best_step(&self) -> PathStep
+    {
+        let mut best_step = PathStep { from_idx : 0, color_idx : 0, to_idx : 0, score: -1.};
+
+        for color_idx in 0..self.colors.len()
+        {
+            let best_step_for_color = self.get_best_step_for_color(color_idx);
+            if best_step_for_color.score > best_step.score
+            {
+                best_step = best_step_for_color;
+            }
+        }   
+        best_step   
+    }
+
+    //Calculate the best pin to move to for the given color
+    fn get_best_step_for_color(&self, color_idx : usize) -> PathStep
+    {
+        let from_idx = self.cur_idxs[color_idx];
+        let mut best_step = PathStep {from_idx, color_idx, to_idx : 0, score : -1.};
+        for to_idx in 0..self.pin_positions.len()
+        {
+            let pin_combo = (std::cmp::min(from_idx, to_idx), std::cmp::max(from_idx,to_idx));
+            let current_score_opt = self.calculate_current_score(color_idx, &pin_combo);
+            if current_score_opt.is_some() && current_score_opt.unwrap() > best_step.score
+            {
+                best_step.score  = current_score_opt.unwrap();
+                best_step.to_idx = if pin_combo.0 == from_idx {pin_combo.1} else {pin_combo.0};
+                best_step.color_idx = color_idx;
+            }            
+        }
+        best_step
+    }
+
+    //Calculate the initial score of every possible line
     fn calculate_initial_scores(&mut self)
     {
         let pin_combos = (0..self.pin_positions.len()).into_iter().tuple_combinations::<(usize,usize)>();
@@ -150,13 +171,44 @@ impl StringPath
         {   
             for ((pin_a_idx, pin_b_idx), score) in combos.iter_mut()
             {
-                *score = self.string_similarity(*pin_a_idx, *pin_b_idx, color_idx);
+                *score = self.calculate_intiial_score(*pin_a_idx, *pin_b_idx, color_idx);
             }
         }   
         self.combo_scores = color_pin_combo_scores;
     }
 
-    fn string_similarity(&self, pin_a_idx : usize, pin_b_idx : usize, color_idx: usize) -> f32
+    //Calculate the current score of the given line (its similarity to the image vs the similarity without it)
+    fn calculate_current_score(&self, color_idx: usize, pin_combo: &(usize, usize)) -> Option<f32>
+    {
+
+        let initial_score_opt = self.combo_scores[color_idx].get(&pin_combo);
+        if initial_score_opt.is_none() {return None};
+        let initial_score = initial_score_opt.unwrap();
+
+        let pin_a = self.pin_positions[pin_combo.0];
+        let pin_b = self.pin_positions[pin_combo.1];
+        let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
+        let mut similarity_sum = 0_f32;
+        let mut weight_sum = 0_f32;
+        for ((x,y), weight) in line
+        {
+            let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
+            let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
+            let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
+
+            let center_strings = self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
+            let lr_mix_strings = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
+            let mix_strings = center_strings.mix(&lr_mix_strings, self.edge_weight);
+            similarity_sum += mix_input.similarity_to(&mix_strings);
+            weight_sum += weight;
+        }
+        let average_similarity = similarity_sum / weight_sum;
+        let current_score = initial_score - average_similarity;
+        Some(current_score)
+    }
+
+    //Calculate the initial score of the given line (its similarity to the input image)
+    fn calculate_intiial_score(&self, pin_a_idx : usize, pin_b_idx : usize, color_idx: usize) -> f32
     {
         let pin_a = self.pin_positions[pin_a_idx];
         let pin_b = self.pin_positions[pin_b_idx];
@@ -168,37 +220,17 @@ impl StringPath
         {
             let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
             let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
-            let mix_input = center_input.mix(&lr_mix_input, 0.2);
+            let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
 
             let lr_mix_strings = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
-            let mix_strings = str_color.mix(&lr_mix_strings, 0.2);
+            let mix_strings = str_color.mix(&lr_mix_strings, self.edge_weight);
+                        
             similarity_sum += mix_input.similarity_to(&mix_strings);
             weight_sum += weight;
         }
         similarity_sum / weight_sum
     }
 
-    fn current_similarity(&self, pin_a_idx : usize, pin_b_idx : usize) -> f32
-    {
-        let pin_a = self.pin_positions[pin_a_idx];
-        let pin_b = self.pin_positions[pin_b_idx];
-        let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
-        let mut similarity_sum = 0_f32;
-        let mut weight_sum = 0_f32;
-        for ((x,y), weight) in line
-        {
-            let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
-            let mix_input = center_input.mix(&lr_mix_input, 0.2);
-
-            let center_strings = self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_strings = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
-            let mix_strings = center_strings.mix(&lr_mix_strings, 0.2);
-            similarity_sum += mix_input.similarity_to(&mix_strings);
-            weight_sum += weight;
-        }
-        similarity_sum / weight_sum
-    }
 
     fn left_right_mix(start : &(f32,f32), end : &(f32, f32), center: &(i32, i32), image : &Rgb32FImage) -> Lab
     {
@@ -222,9 +254,17 @@ pub fn generate_path(settings_path: &'static str) -> Result<StringPath, String>
 {
     let settings = read_string_settings(settings_path).map_err(|e| e.to_string())?;
     let mut sp = StringPath::new(settings)?;
+    let window = create_window("Image", Default::default()).unwrap();
     while sp.step() 
     {
-        println!("{:?}:\t{:?}",sp.cur_step, sp.cur_idxs);
+        if sp.cur_step % 100 == 0
+        {
+            let binding =  DynamicImage::ImageRgb32F(sp.strings_drawn.as_rgb()).into_rgb8();
+            let window_image  = ImageView::new(ImageInfo::rgb8(sp.input_image.width(), sp.input_image.height()), binding.as_bytes());
+            window.set_image("input_image", window_image).unwrap();
+        }
+
+        println!("{:?}:\t{:?} \tScore: {:.2}%",sp.cur_step, sp.cur_idxs, sp.path.last().unwrap().score*100.);
     }
     return Ok(sp);
 }

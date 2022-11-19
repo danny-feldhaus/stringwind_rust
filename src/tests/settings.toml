@@ -1,10 +1,14 @@
 in_image_path = "src/tests/images/vangogh.png"
-out_image_path = "src/tests/images/output/"
+out_image_path = "src/tests/images/output/0.5_weight_"
 pin_count = 250
 pin_radius = 0.95
-line_count = 100
+line_count = 2500
+width = 4096
+height = 4096
 
 str_colors = [
     [0,0,0]
 ]
 bg_color = [1,1,1]
+
+edge_weight = 0.3

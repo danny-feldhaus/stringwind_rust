@@ -86,9 +86,9 @@ impl StringSettings
 impl Default for StringSettings
 {
     fn default() -> Self {
-        let usize_keys = ["pin_count", "line_count"];
+        let usize_keys = ["pin_count", "line_count","width","height"];
         let string_keys = ["in_image_path", "out_image_path"];
-        let float_keys = ["pin_radius"];
+        let float_keys = ["pin_radius","edge_weight"];
         let lab_keys = ["bg_color"];
         let lab_vec_keys = ["str_colors"];
 
