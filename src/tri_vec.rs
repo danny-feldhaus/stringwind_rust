@@ -4,38 +4,44 @@ use std::cmp::Ordering;
 pub struct TriVec<T>
 {
     pub size : usize,
-    data: Vec<Vec<T>>
+    data: Vec<Vec<T>>,
 }
 
-impl<T: Default + Clone> TriVec<T>
+impl<T: Default + Clone + 'static> TriVec<T>
 {
-    fn new(&self, size: usize, default: &T) -> TriVec<T>
+    pub fn new(size: usize, default: &T) -> TriVec<T>
     {   
         let mut data: Vec<Vec<T>> = vec![Vec::<T>::new(); size];
         for (row_idx, row) in data.iter_mut().enumerate()
         {
-            for _col_idx in 0..row_idx
+            for _col_idx in 0..row_idx+1
             {
                 row.push(default.clone());
             }
         }
         TriVec::<T>{size, data}
     }
-    fn at(&self, x: usize, y: usize) -> &T
+
+    pub fn at(&mut self, x: usize, y: usize) -> &mut T
     {
-        //The lesser index is always first
+        //The greater index is always first
         let index = match x.cmp(&y)
         {
-            Ordering::Less => (x,y),
+            Ordering::Greater => (x,y),
             _ => (y,x)
         };
         assert!(index.0 < self.size);
-        &self.data[index.0][index.1]
+        &mut self.data[index.0][index.1]
     }
-    fn all_at(&self, x : usize) -> &Vec<T>
+    #[allow(dead_code)]
+    pub fn set(&mut self, x: usize, y:usize, value: T)
+    {
+        *self.at(x,y) = value;
+    }
+    #[allow(dead_code)]
+    pub fn all_at(&self, x : usize) -> &Vec<T>
     {
         assert!(x < self.size);
         &self.data[x]
     }
 }
-

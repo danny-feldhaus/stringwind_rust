@@ -6,10 +6,9 @@ use super::image_module::color_conversion::{ColorSpace, PaletteToImage};
 use super::string_setting::*;
 use super::tri_vec::*;
 
+use geo::{Line, coord, algorithm::line_intersection::line_intersection, LineIntersection};
 use image:: {Rgb32FImage, ImageResult, EncodableLayout, DynamicImage};
-use itertools::Itertools;
 use palette::{Lab, Mix};
-use std::collections::HashMap;
 use std::path::Path;
 use line_drawing::XiaolinWu;
 use show_image::{ImageView, ImageInfo, create_window};
@@ -24,6 +23,15 @@ pub struct PathStep
     pub score : f32
 }
 
+#[derive(Default, Clone)]
+pub enum StringCombo
+{
+    AllowedScored(f32),
+    AllowedUnscored,
+    #[default]
+    Banned
+}
+
 pub struct StringPath
 {
     pub path : Vec<PathStep>, //Each element of vector is (fron_index, to_index, color_index)
@@ -35,7 +43,7 @@ pub struct StringPath
     _background : Lab,
     path_length : usize,
     //Internally generated
-    combo_scores : Vec<HashMap<(usize,usize), (f32,f32)>>,
+    combo_scores : TriVec<Vec<StringCombo>>,
     strings_drawn : Rgb32FImage,
     cur_step : usize,
     cur_idxs : Vec<usize>,
@@ -56,7 +64,7 @@ impl Default for StringPath
             _background: Lab::default(),
             path_length: usize::default(),
             //Internally generated
-            combo_scores: Vec::<HashMap<(usize,usize), (f32,f32)>>::default(), 
+            combo_scores: Default::default(),
             strings_drawn: Rgb32FImage::default(),
             cur_step: 0,
             cur_idxs : Vec::default(),
@@ -104,17 +112,17 @@ impl StringPath
             input_image_path,
             input_image,
             output_path,
+            combo_scores : TriVec::new(pin_count, &vec![StringCombo::Banned; colors.len()]),
             colors,
             _background : background,
             path_length,
-            combo_scores : Vec::<HashMap<(usize,usize), (f32,f32)>>::default(),
             strings_drawn,
             cur_step: 0,
             cur_idxs,
             cur_scores,
             edge_weight
         };
-        sp.calculate_initial_scores();
+        sp.populate_allowed_combos();
 
         Ok(sp)
     }
@@ -146,14 +154,7 @@ impl StringPath
         let to_coord = self.pin_positions[step.to_idx];
         draw_line_lab(from_coord,to_coord, &mut self.strings_drawn, &self.colors[step.color_idx]);
         self.path.push(step);
-        /*
-        let next_step = self.get_best_step();
-        self.cur_idxs[next_step.color_idx] = next_step.to_idx;
-        let from_coord = self.pin_positions[next_step.from_idx];
-        let to_coord = self.pin_positions[next_step.to_idx];
-        draw_line_lab(from_coord,to_coord, &mut self.strings_drawn, &self.colors[next_step.color_idx]);
-        self.path.push(next_step);
-        */
+        self.unscore_intersected(&step);
         true
     }
 
@@ -171,7 +172,7 @@ impl StringPath
     }
 
     //Calculate the best pin to move to for the given color
-    fn get_best_step(&self, color_idx : usize) -> PathStep
+    fn get_best_step(&mut self, color_idx : usize) -> PathStep
     {
         let from_idx = self.cur_idxs[color_idx];
         let mut best_step = PathStep {from_idx, color_idx, to_idx : 0, score : -1.};
@@ -190,95 +191,113 @@ impl StringPath
     }
     
     //Calculate the initial score of every possible line
-    fn calculate_initial_scores(&mut self)
+    fn populate_allowed_combos(&mut self)
     {
-        let pin_combos = (0..self.pin_positions.len()).into_iter().tuple_combinations::<(usize,usize)>();
-        let pin_combo_scores: HashMap<(usize, usize), (f32,f32)> = HashMap::from_iter(pin_combos.zip(std::iter::repeat((0.,0.))));
-        let mut color_pin_combo_scores = vec![pin_combo_scores; self.colors.len()];
-
-        for (color_idx, combos) in color_pin_combo_scores.iter_mut().enumerate()
-        {   
-            for ((pin_a_idx, pin_b_idx), score) in combos.iter_mut()
+        for x in 0..self.pin_positions.len()
+        {
+            for y in x+1..self.pin_positions.len()
             {
-                *score = (0.,0.);//self.calculate_intiial_score(*pin_a_idx, *pin_b_idx, color_idx);
+                for c in self.combo_scores.at(x,y)
+                {
+                    *c = StringCombo::AllowedUnscored;
+                }
             }
-        }   
-        self.combo_scores = color_pin_combo_scores;
+        }
     }
     
     //Calculate the current score of the given line (its similarity to the image vs the similarity without it)
-    fn calculate_current_score(&self, color_idx: usize, pin_combo: &(usize, usize)) -> Option<f32>
+    fn calculate_current_score(&mut self, color_idx: usize, pin_combo: &(usize, usize)) -> Option<f32>
     {
-
-        let initial_score_opt = self.combo_scores[color_idx].get(&pin_combo);
-        if initial_score_opt.is_none() {return None};
-       // let initial_score = initial_score_opt.unwrap();
-
-        let pin_a = self.pin_positions[pin_combo.0];
-        let pin_b = self.pin_positions[pin_combo.1];
-        let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
-        let mut score_sum = 0_f32;
-        let mut weight_sum = 0_f32;
-
-        let center_drawn = self.colors[color_idx];
-
-        for ((x,y), weight) in line
+        match self.combo_scores.at(pin_combo.0, pin_combo.1)[color_idx]
         {
-            //Calculate the mixed color of input_image at the current point
-            let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
-            let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
-            //Calculate the mixed color of strings_drawn, without the line drawn over it, at the current point
-            let center_undrawn =  self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_undrawn = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
-            let mix_undrawn = center_undrawn.mix(&lr_mix_undrawn, self.edge_weight);
-            //Calculate the mixed color of strings_drawn, with the line drawn over it, at the current point
-            let mix_drawn = center_drawn.mix(&lr_mix_undrawn, self.edge_weight);
-            //Score using the unmixed colors at (x,y). Meant to represent the score with the assumption that the current color will be dense in this area.
-            let score_unmixed = center_drawn.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
-            //Score using the mixed colors at (x,y). Meant to represent the score with the assumption that that the current color will be sparse in this area.
-            let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
-            //Choose the best of the two scores 
-            let score = score_unmixed.max(score_mixed);
-            score_sum += score;
-            weight_sum += weight;
-        }
-        let score = score_sum / weight_sum;
-        Some(score)
+            StringCombo::AllowedScored(s) => return Some(s),
+            StringCombo::Banned => return None,
+            StringCombo::AllowedUnscored =>
+            {
+                let pin_a = self.pin_positions[pin_combo.0];
+                let pin_b = self.pin_positions[pin_combo.1];
+                let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
+                let mut score_sum = 0_f32;
+                let mut weight_sum = 0_f32;
+
+                let center_drawn = self.colors[color_idx];
+
+                for ((x,y), weight) in line
+                {
+                    //Calculate the mixed color of input_image at the current point
+                    let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
+                    let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
+                    let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
+                    //Calculate the mixed color of strings_drawn, without the line drawn over it, at the current point
+                    let center_undrawn =  self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
+                    let lr_mix_undrawn = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
+                    let mix_undrawn = center_undrawn.mix(&lr_mix_undrawn, self.edge_weight);
+                    //Calculate the mixed color of strings_drawn, with the line drawn over it, at the current point
+                    let mix_drawn = center_drawn.mix(&lr_mix_undrawn, self.edge_weight);
+                    //Score using the unmixed colors at (x,y). Meant to represent the score with the assumption that the current color will be dense in this area.
+                    let score_unmixed = center_drawn.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
+                    //Score using the mixed colors at (x,y). Meant to represent the score with the assumption that that the current color will be sparse in this area.
+                    let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
+                    //Choose the best of the two scores 
+                    let score = score_unmixed.max(score_mixed);
+                    score_sum += score;
+                    weight_sum += weight;
+                }
+                let score = score_sum / weight_sum;
+                return Some(score)
+            }
+        }        
     }
 
-    /*
-    //Calculate the initial score of the given line (its similarity to the input image)
-    fn calculate_intiial_score(&self, pin_a_idx : usize, pin_b_idx : usize, color_idx: usize) -> (f32, f32)
+    fn unscore_intersected(&mut self, step: &PathStep)
     {
-        let pin_a = self.pin_positions[pin_a_idx];
-        let pin_b = self.pin_positions[pin_b_idx];
-        let str_color = self.colors[color_idx];
-        let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
-        let mut sum_mixed = 0_f32;
-        let mut sum_unmixed = 0_f32;
-        let mut weight_sum = 0_f32;
-        for ((x,y), weight) in line
+        let inter_a = self.pin_positions[step.from_idx];
+        let inter_b = self.pin_positions[step.to_idx];
+        draw_line_lab(inter_a,inter_b, &mut self.strings_drawn, &self.colors[step.color_idx]);
+        for color_idx in 0..self.colors.len()
         {
-            let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
-            let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
-
-            let center_undrawn =  self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-            let lr_mix_undrawn = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
-            let mix_undrawn = center_undrawn.mix(&lr_mix_undrawn, self.edge_weight);
-
-            let mix_drawn = str_color.mix(&lr_mix_undrawn, self.edge_weight);
-
-            let score_unmixed = str_color.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
-            let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
-            let score = score_unmixed.max(score_mixed);
-            sum_unmixed += score;
-            weight_sum += weight;
+            for x in 0..self.pin_positions.len()
+            {
+                for y in x+1..self.pin_positions.len()
+                {
+                    if self.do_intersect(&(step.from_idx,step.to_idx), &(x,y), color_idx)
+                    {
+                        self.combo_scores.at(x,y)[color_idx] = StringCombo::AllowedUnscored;
+                    }
+                }
+            }
         }
-        (sum_unmixed / weight_sum, sum_mixed / weight_sum)
     }
-    */
+    
+    fn do_intersect(&mut self, combo_a: &(usize, usize), combo_b: &(usize, usize), color_idx : usize) -> bool
+    {
+        match self.combo_scores.at(combo_a.0,combo_a.1)[color_idx] 
+        {
+            StringCombo::Banned => return false,
+            _ => {}
+        }
+        match self.combo_scores.at(combo_b.0,combo_b.1)[color_idx]
+        {
+            StringCombo::Banned => return false,
+            _ => {}
+        }
+        let from_a = self.pin_positions[combo_a.0];
+        let to_a   = self.pin_positions[combo_a.1];
+        let line_a = Line::new(coord!{x: from_a.0,y: from_a.1}, coord!{x: to_a.0,y: to_a.1});
+
+        let from_b = self.pin_positions[combo_b.0];
+        let to_b   = self.pin_positions[combo_b.1];
+        let line_b = Line::new(coord!{x: from_b.0,y: from_b.1}, coord!{x: to_b.0,y: to_b.1});
+
+        let a_b_intersection = line_intersection(line_a, line_b);
+        if a_b_intersection.is_none() {return false};
+        let a_b_intersection = a_b_intersection.unwrap();
+        match a_b_intersection
+        {
+            LineIntersection::SinglePoint { intersection: _, is_proper} => {return is_proper},
+            LineIntersection::Collinear { intersection: _ } => return true,
+        }
+    }
 
     fn left_right_mix(start : &(f32,f32), end : &(f32, f32), center: &(i32, i32), image : &Rgb32FImage) -> Lab
     {
