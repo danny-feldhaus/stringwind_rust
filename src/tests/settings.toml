@@ -1,6 +1,6 @@
 in_image_path = "src/tests/images/vangogh.png"
 out_image_path = "src/tests/images/output/"
-pin_count = 250
+pin_count = 50
 pin_radius = 0.95
 line_count = 5000
 width = 4096
