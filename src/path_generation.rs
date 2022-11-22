@@ -7,7 +7,7 @@ use super::string_setting::*;
 use super::tri_vec::*;
 
 use geo::{Line, coord, algorithm::line_intersection::line_intersection, LineIntersection};
-use image:: {Rgb32FImage, ImageResult, EncodableLayout, DynamicImage};
+use image:: {Rgb32FImage, RgbaImage, ImageResult, EncodableLayout, DynamicImage};
 use palette::{Lab, Mix};
 use std::path::Path;
 use line_drawing::XiaolinWu;
@@ -23,7 +23,7 @@ pub struct PathStep
     pub score : f32
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq)]
 pub enum StringCombo
 {
     AllowedScored(f32),
@@ -36,6 +36,7 @@ pub struct StringPath
 {
     pub path : Vec<PathStep>, //Each element of vector is (fron_index, to_index, color_index)
     pub pin_positions : Vec<(f32, f32)>, //Pin positions in unit space
+    pin_radius : f32,
     input_image_path : String,
     input_image : Rgb32FImage, //Input image in Lab color space
     output_path : String,
@@ -57,6 +58,7 @@ impl Default for StringPath
         return StringPath{
             path: Vec::default(), 
             pin_positions: Vec::default(), 
+            pin_radius: 0.,
             input_image_path : Default::default(),
             input_image: Rgb32FImage::default(),
             output_path: String::default(),
@@ -98,7 +100,8 @@ impl StringPath
         let output_path = settings.get::<String>("out_image_path")?.clone();
         let dimensions = input_image.dimensions();
         //Make pins
-        let pin_positions = pin_circle(pin_count, *settings.get::<f32>("pin_radius")?, input_image.dimensions());
+        let pin_radius = *settings.get::<f32>("pin_radius")?;
+        let pin_positions = pin_circle(pin_count,pin_radius, input_image.dimensions());
         let strings_drawn = Rgb32FImage::from_pixel(dimensions.0, dimensions.1,  background.to_rgb(ColorSpace::Lab));
         //Make combo scores iterator
 
@@ -109,6 +112,7 @@ impl StringPath
         {
             path: Vec::new(),
             pin_positions,
+            pin_radius,
             input_image_path,
             input_image,
             output_path,
@@ -219,34 +223,40 @@ impl StringPath
                 let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
                 let mut score_sum = 0_f32;
                 let mut weight_sum = 0_f32;
-
-                let center_drawn = self.colors[color_idx];
-
+                let line_color = self.colors[color_idx];
                 for ((x,y), weight) in line
                 {
-                    //Calculate the mixed color of input_image at the current point
-                    let center_input = self.input_image.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-                    let lr_mix_input = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.input_image);
-                    let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
-                    //Calculate the mixed color of strings_drawn, without the line drawn over it, at the current point
-                    let center_undrawn =  self.strings_drawn.get_pixel(x as u32,y as u32).as_lab(&ColorSpace::Lab);
-                    let lr_mix_undrawn = StringPath::left_right_mix(&pin_a, &pin_b, &(x,y), &self.strings_drawn);
-                    let mix_undrawn = center_undrawn.mix(&lr_mix_undrawn, self.edge_weight);
-                    //Calculate the mixed color of strings_drawn, with the line drawn over it, at the current point
-                    let mix_drawn = center_drawn.mix(&lr_mix_undrawn, self.edge_weight);
-                    //Score using the unmixed colors at (x,y). Meant to represent the score with the assumption that the current color will be dense in this area.
-                    let score_unmixed = center_drawn.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
-                    //Score using the mixed colors at (x,y). Meant to represent the score with the assumption that that the current color will be sparse in this area.
-                    let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
-                    //Choose the best of the two scores 
-                    let score = score_unmixed.max(score_mixed);
+                    let score = self.score_at_point(&(x,y), &pin_a, &pin_b, &line_color) * weight;
+                    //println!("Score 1: {score}\nScore 2: {score_2}\n");
                     score_sum += score;
                     weight_sum += weight;
                 }
                 let score = score_sum / weight_sum;
+                self.combo_scores.at(pin_combo.0, pin_combo.1)[color_idx] = StringCombo::AllowedScored(score);
                 return Some(score)
             }
         }        
+    }
+    
+    fn score_at_point(&self, point: &(i32,i32), line_start: &(f32, f32), line_end: &(f32, f32), line_color: &Lab) -> f32
+    {
+        //Calculate the mixed color of input_image at the current point
+        let center_input = self.input_image.get_pixel(point.0 as u32,point.1 as u32)
+            .as_lab(&ColorSpace::Lab);
+        let lr_mix_input = StringPath::left_right_mix(&line_start, &line_end, &(point.0,point.1), &self.input_image);
+        let mix_input = center_input.mix(&lr_mix_input, self.edge_weight);
+        //Calculate the mixed color of strings_drawn, without the line drawn over it, at the current point
+        let center_undrawn =  self.strings_drawn.get_pixel(point.0 as u32,point.1 as u32).as_lab(&ColorSpace::Lab);
+        let lr_mix_undrawn = StringPath::left_right_mix(&line_start, &line_end, &(point.0,point.1), &self.strings_drawn);
+        let mix_undrawn = center_undrawn.mix(&lr_mix_undrawn, self.edge_weight);
+        //Calculate the mixed color of strings_drawn, with the line drawn over it, at the current point
+        let mix_drawn = line_color.mix(&lr_mix_undrawn, self.edge_weight);
+        //Score using the unmixed colors at (x,y). Meant to represent the score with the assumption that the current color will be dense in this area.
+        let score_unmixed = line_color.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
+        //Score using the mixed colors at (x,y). Meant to represent the score with the assumption that that the current color will be sparse in this area.
+        let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
+        //Choose the best of the two scores 
+        score_unmixed.max(score_mixed)
     }
 
     fn unscore_intersected(&mut self, step: &PathStep)
@@ -271,16 +281,12 @@ impl StringPath
     
     fn do_intersect(&mut self, combo_a: &(usize, usize), combo_b: &(usize, usize), color_idx : usize) -> bool
     {
-        match self.combo_scores.at(combo_a.0,combo_a.1)[color_idx] 
+        if StringCombo::Banned == self.combo_scores.at(combo_a.0,combo_a.1)[color_idx] ||
+           StringCombo::Banned == self.combo_scores.at(combo_b.0,combo_b.1)[color_idx]
         {
-            StringCombo::Banned => return false,
-            _ => {}
+            return false;
         }
-        match self.combo_scores.at(combo_b.0,combo_b.1)[color_idx]
-        {
-            StringCombo::Banned => return false,
-            _ => {}
-        }
+
         let from_a = self.pin_positions[combo_a.0];
         let to_a   = self.pin_positions[combo_a.1];
         let line_a = Line::new(coord!{x: from_a.0,y: from_a.1}, coord!{x: to_a.0,y: to_a.1});
@@ -317,10 +323,84 @@ impl StringPath
 
 }
 
+trait StringPathTests
+{   
+    fn fill_unique_pixels(&self);
+}
+type GrayImage16 = image::ImageBuffer<image::Luma<u16>, Vec<u16>>;
+
+impl StringPathTests for StringPath
+{
+    fn fill_unique_pixels(&self)
+    {
+        let mut coverage_map = image::GrayImage::new(self.strings_drawn.width(), self.strings_drawn.height());
+        for x in 0..self.pin_positions.len()
+        {
+            for y in x+1..self.pin_positions.len()
+            {
+                let pin_a = self.pin_positions[x];
+                let pin_b = self.pin_positions[y];
+                let line =  XiaolinWu::<f32, i32>::new(pin_a, pin_b);
+                for ((x,y), weight) in line
+                {
+                    if weight > 0.3
+                    {
+                        coverage_map.get_pixel_mut(x as u32, y as u32)[0] += 1;
+                    }
+                }
+            }
+        }
+        coverage_map.save(self.output_path.clone() + "coverage_map.png").unwrap();
+        let max_coverage = coverage_map.pixels().max_by(|a,b| a[0].cmp(&b[0])).unwrap()[0];
+        let mut coverage_distribution = vec![0; max_coverage as usize + 1];
+        let mut pixels_in_circle = 0;
+        let max_d_from_center = self.pin_radius * coverage_map.width() as f32 / 2.;
+        for (x,y, pixel) in coverage_map.enumerate_pixels()
+        {
+            let d_from_center = (((x as f32 - coverage_map.width() as f32/2. )).powf(2.) + ((y as f32 - coverage_map.height() as f32/2.)).powf(2.)).sqrt();
+            if d_from_center <= max_d_from_center
+            {
+                coverage_distribution[pixel[0] as usize] += 1;
+                pixels_in_circle += 1;
+            }
+        }
+        let unique_string_coverage_map = RgbaImage::new(coverage_map.width(), coverage_map.height());
+        let mut unique_lines = 0;
+        for x in 0..self.pin_positions.len()
+        {
+            for y in x+1..self.pin_positions.len()
+            {
+                let pin_a = self.pin_positions[x];
+                let pin_b = self.pin_positions[y];
+                let line =  XiaolinWu::<f32, i32>::new(pin_a, pin_b);
+                let mut uniques_in_line = 0;
+                for ((x,y), weight) in line
+                {
+                    if weight > 0.3
+                    {
+                        if coverage_map.get_pixel_mut(x as u32, y as u32)[0] == 1 
+                        {
+                            uniques_in_line += 1;
+                        }
+                    }
+                }
+                if uniques_in_line != 0
+                {
+                    unique_lines += 1
+                }
+            }
+        }
+        println!("Total lines containing unique pixels: {unique_lines}");
+
+    }
+}
+
+
 pub fn generate_path(settings_path: &'static str) -> Result<StringPath, String>
 {
     let settings = read_string_settings(settings_path).map_err(|e| e.to_string())?;
     let mut sp = StringPath::new(settings)?;
+    sp.fill_unique_pixels();
     let window = create_window("Image", Default::default()).unwrap();
     while sp.step() 
     {
