@@ -1,14 +1,21 @@
 in_image_path = "src/tests/images/vangogh.png"
-out_image_path = "src/tests/images/output/0.5_weight_"
+out_image_path = "src/tests/images/output/"
 pin_count = 250
 pin_radius = 0.95
-line_count = 2500
+line_count = 5000
 width = 4096
 height = 4096
 
 str_colors = [
-    [0,0,0]
+    [0,0,0], #black
+    #[1,0,0],
+    #[0,1,0],
+    [0,0,1],
+    #[0.514,0.706,0.024], #raccoon green
+    #[0.3,0.3,0.3] #raccoon grey
+    [0.37,0.239,0.145], #vg red
+    #[0.862745, 0.607843, 0.427451] #vg skin
 ]
 bg_color = [1,1,1]
 
-edge_weight = 0.3
+edge_weight = 0.4

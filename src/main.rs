@@ -1,6 +1,9 @@
+#![feature(path_file_prefix)]
+
 mod image_module;
 mod string_setting;
 mod path_generation;
+mod tri_vec;
 
 #[show_image::main]
 pub fn main()
