@@ -1,4 +1,4 @@
-use image::Rgb32FImage;
+use image::Rgba32FImage;
 use line_drawing::XiaolinWu;
 use lerp::Lerp;
 use palette::Lab;
@@ -37,15 +37,16 @@ pub fn lr_steps(start : (f32, f32), end : (f32, f32), edge_weight : f32) -> Vec<
     steps
 }
 
-pub fn draw_line_lab(point_a: (f32, f32), point_b: (f32, f32), image: &mut Rgb32FImage, color: &Lab)
+pub fn draw_line_lab(point_a: (f32, f32), point_b: (f32, f32), image: &mut Rgba32FImage, color: &Lab, alpha: f32)
 {
     let xiao = XiaolinWu::<f32, i32>::new(point_a, point_b);
     xiao.for_each(|((x,y), value)| 
         {
             let pixel = image.get_pixel_mut(x as u32,y as u32);
-            pixel[0] = pixel[0].lerp(color.l, value);
-            pixel[1] = pixel[1].lerp(color.a, value);
-            pixel[2] = pixel[2].lerp(color.b, value);
+            pixel[0] = color.l;
+            pixel[1] = color.a;
+            pixel[2] = color.b;
+            pixel[3] = value;
         }
     );
 }
