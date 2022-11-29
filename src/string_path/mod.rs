@@ -1,3 +1,2 @@
-mod string_path;
-pub mod path_generation;
-mod string_setting;
+pub mod string_path;
+pub mod string_setting;

@@ -22,7 +22,19 @@ impl<T: Default + Clone + 'static> TriVec<T>
         TriVec::<T>{size, data}
     }
 
-    pub fn at(&mut self, x: usize, y: usize) -> &mut T
+    pub fn at(&self, x: usize, y: usize) -> &T
+    {
+        //The greater index is always first
+        let index = match x.cmp(&y)
+        {
+            Ordering::Greater => (x,y),
+            _ => (y,x)
+        };
+        assert!(index.0 < self.size);
+        &self.data[index.0][index.1]
+    }
+
+    pub fn at_mut(&mut self, x: usize, y: usize) -> &mut T
     {
         //The greater index is always first
         let index = match x.cmp(&y)
@@ -36,7 +48,7 @@ impl<T: Default + Clone + 'static> TriVec<T>
     #[allow(dead_code)]
     pub fn set(&mut self, x: usize, y:usize, value: T)
     {
-        *self.at(x,y) = value;
+        *self.at_mut(x,y) = value;
     }
     #[allow(dead_code)]
     pub fn all_at(&self, x : usize) -> &Vec<T>

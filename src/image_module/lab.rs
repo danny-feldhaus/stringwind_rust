@@ -9,13 +9,13 @@ pub struct LabImageBuffer
 {
     buffer: ImageBuffer<Rgb<f32>, Vec<f32>>,
 }
-
+#[allow(dead_code)]
 impl LabImageBuffer
 {
     pub fn width(&self) -> u32 {self.buffer.width()}
     pub fn height(&self) -> u32 {self.buffer.height()}
     pub fn dimensions(&self) -> (u32, u32) {self.buffer.dimensions()}
-    pub fn draw_line(&mut self, start: (f32, f32), end: (f32, f32), color: &Lab, alpha_weight: bool)
+    pub fn draw_line(&mut self, start: (f32, f32), end: (f32, f32), color: &Lab)
     {
         let line = XiaolinWu::<f32, i32>::new(start, end);
         line.for_each(|((x,y), weight)| 
@@ -33,6 +33,7 @@ pub struct LabaImageBuffer
     buffer: ImageBuffer<Rgba<f32>, Vec<f32>>
 }
 
+#[allow(dead_code)]
 impl LabaImageBuffer
 {
     pub fn width(&self) -> u32 {self.buffer.width()}
@@ -98,7 +99,7 @@ impl LabBuf for LabImageBuffer
     fn as_rgb_image_buffer(&self) -> Self::BufferType 
     {
         let mut rgb_buffer = self.buffer.clone();
-        rgb_buffer.par_chunks_mut(4).for_each(|p|
+        rgb_buffer.par_chunks_mut(3).for_each(|p|
             {
                 let srgb: Srgb = Lab::new(p[0], p[1], p[2]).into_color();
                 p[0] = srgb.red;
@@ -116,7 +117,8 @@ impl LabBuf for LabImageBuffer
                 p[0] = srgb.l;
                 p[1] = srgb.a;
                 p[2] = srgb.b;
-            });
+            }
+        );
         Self
         {
             buffer: lab_buff
@@ -125,7 +127,7 @@ impl LabBuf for LabImageBuffer
     fn from_file(path: &str) -> Result<Self, image::ImageError>
     {
         let binding = image::open(path)?;
-        let mut rgb_img = binding.into_rgb32f().clone();
+        let rgb_img = binding.into_rgb32f().clone();
         Ok(Self::from_rgb_image_buffer(&rgb_img))
     }
     fn from_lab(width: u32, height: u32, color: &Lab) -> Self
@@ -204,7 +206,7 @@ impl LabBuf for LabaImageBuffer
     fn from_file(path: &str) -> Result<Self, image::ImageError>
     {
         let binding = image::open(path)?;
-        let mut rgba_img = binding.into_rgba32f().clone();
+        let rgba_img = binding.into_rgba32f().clone();
         Ok(Self::from_rgb_image_buffer(&rgba_img))
     }
     fn from_lab(width: u32, height: u32, color: &Laba) -> Self

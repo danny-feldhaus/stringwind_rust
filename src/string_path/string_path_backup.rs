@@ -4,15 +4,13 @@ use crate::{
 };
 use super::string_setting::StringSettings;
 
-use std::{path::Path, error::Error};
+use std::path::Path;
 use rand::distributions::{WeightedIndex,Distribution};
 use geo::{Line, coord, algorithm::line_intersection::line_intersection, LineIntersection};
 use image:: {ImageBuffer, ImageResult, GrayImage};
-use palette::{Lab, Laba, Mix, Srgb, IntoColor, Srgba, rgb::Rgb, encoding::srgb};
+use palette::{Lab, Laba, Mix};
 use line_drawing::XiaolinWu;
-use csv::Writer;
-use svg::node::element::{Path as PathSVG, path::Data};
-use svg::Document;
+
 
 #[derive(Clone, Copy)]
 pub struct PathStep
@@ -26,8 +24,8 @@ pub struct PathStep
 #[derive(Default, Clone, PartialEq)]
 pub enum StringCombo
 {
-    Allowed(Option<f32>),
-    Filled,
+    AllowedScored(f32),
+    AllowedUnscored,
     #[default]
     Banned
 }
@@ -233,7 +231,7 @@ impl StringPath
             self.strings_drawn.draw_line(from_coord, to_coord, &self.colors[next_color_idx], false);
             self.increment_string_layer(step.from_idx, step.to_idx, step.color_idx);
             self.path.push(step);
-            self.combo_scores.at_mut(step.from_idx, step.to_idx)[next_color_idx] = StringCombo::Filled;
+            self.combo_scores.at_mut(step.from_idx, step.to_idx)[next_color_idx] = StringCombo::Banned;
             self.unscore_intersected(&step);
             self.decrease_coverage(&step);
             println!("\tPicked Color {}. Moving to {}.", next_color_idx, self.cur_idxs[step.color_idx]);
@@ -308,7 +306,7 @@ impl StringPath
                 {
                     for c in self.combo_scores.at_mut(x,y)
                     {
-                        *c = StringCombo::Allowed(None);
+                        *c = StringCombo::AllowedUnscored;
                     }
                 }
             }
@@ -320,42 +318,36 @@ impl StringPath
     {
         match self.combo_scores.at(pin_combo.0, pin_combo.1)[color_idx]
         {
-            StringCombo::Allowed(s) => 
+            StringCombo::AllowedScored(s) => return Some(s),
+            StringCombo::Banned => return None,
+            StringCombo::AllowedUnscored =>
             {
-                match s
+                let pin_a = self.pin_positions[pin_combo.0];
+                let pin_b = self.pin_positions[pin_combo.1];
+                let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
+                let mut score_sum = 0_f32;
+                let mut weight_sum = 0_f32;
+                let line_color = self.colors[color_idx];
+                for ((x,y), weight) in line
                 {
-                    Some(score) => return Some(score),
-                    None => 
+                    if self.coverage_map.get_pixel(x as u32,y as u32)[0] == 2
                     {
-                        let pin_a = self.pin_positions[pin_combo.0];
-                        let pin_b = self.pin_positions[pin_combo.1];
-                        let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
-                        let mut score_sum = 0_f32;
-                        let mut weight_sum = 0_f32;
-                        let line_color = self.colors[color_idx];
-                        for ((x,y), weight) in line
-                        {
-                            if self.coverage_map.get_pixel(x as u32,y as u32)[0] == 2
-                            {
-                                let score = self.score_at_point(&(x,y), &pin_a, &pin_b, color_idx) * weight;
-                                score_sum += score;
-                                weight_sum += weight;
-                            }
-                        }
-                        if weight_sum != 0.
-                        {
-                            let score = score_sum / weight_sum;
-                            self.combo_scores.at_mut(pin_combo.0, pin_combo.1)[color_idx] = StringCombo::Allowed(Some(score));
-                            return Some(score)
-                        }
-                        else
-                        {
-                            return None
-                        }
+                        let score = self.score_at_point(&(x,y), &pin_a, &pin_b, color_idx) * weight;
+                        score_sum += score;
+                        weight_sum += weight;
                     }
                 }
-            },
-            _ => return None
+                if weight_sum != 0.
+                {
+                    let score = score_sum / weight_sum;
+                    self.combo_scores.at_mut(pin_combo.0, pin_combo.1)[color_idx] = StringCombo::AllowedScored(score);
+                    return Some(score)
+                }
+                else
+                {
+                    return None
+                }
+            }
         }        
     }
     
@@ -364,10 +356,11 @@ impl StringPath
         let line_color = &self.colors[color_idx];
         let mixed_input = StringPath::mix_at_point(line_start, line_end, point, &self.input_image, self.edge_weight).unwrap();
         let unmixed_input = StringPath::mix_at_point(line_start, line_end, point, &self.input_image, 0.).unwrap();
-        let mixed_undrawn = StringPath::mix_at_point(line_start, line_end, point, &self.strings_drawn, self.edge_weight);
-        let unmixed_undrawn = StringPath::mix_at_point(line_start, line_end, point, &self.strings_drawn, 0.);
+        //let mixed_undrawn = StringPath::mix_at_point(line_start, line_end, point, &self.strings_drawn, self.edge_weight);
+        //let unmixed_undrawn = StringPath::mix_at_point(line_start, line_end, point, &self.strings_drawn, 0.);
         let mixed_drawn = StringPath::mix_line_at_point(line_start, line_end, point, &self.strings_drawn, self.edge_weight, line_color);
         let unmixed_drawn = line_color;
+        /*
         let score_unmixed = match unmixed_undrawn
         {
             Some(unmixed_undrawn) => unmixed_drawn.similarity_to(&unmixed_input) - unmixed_undrawn.similarity_to(&unmixed_input),
@@ -378,11 +371,14 @@ impl StringPath
             Some(mixed_undrawn) => mixed_drawn.similarity_to(&mixed_input) - mixed_undrawn.similarity_to(&mixed_input),
             None => mixed_drawn.similarity_to(&mixed_input)
         };
-        score_mixed.max(score_unmixed)
-        //let score_unmixed = line_color.similarity_to(&center_input) - center_undrawn.similarity_to(&center_input);
-        //let score_mixed = mix_drawn.similarity_to(&mix_input) - mix_undrawn.similarity_to(&mix_input);
-        ////Choose the best of the two scores 
-        //score_unmixed.max(score_mixed)
+        */
+        let score_unmixed = unmixed_drawn.similarity_to(&unmixed_input);
+        let score_mixed = mixed_drawn.similarity_to(&mixed_input);
+        let mut score = score_mixed.max(score_unmixed);
+
+        let layer_count = self.string_layers[color_idx].get_pixel(point.0 as u32, point.1 as u32)[0];
+        score *= 0.75_f32.powf(layer_count as f32);
+        score
     }
 
     fn unscore_intersected(&mut self, step: &PathStep)
@@ -395,7 +391,7 @@ impl StringPath
                 {
                     if self.do_intersect(&(step.from_idx,step.to_idx), &(x,y), color_idx)
                     {
-                        self.combo_scores.at_mut(x,y)[color_idx] = StringCombo::Allowed(None);
+                        self.combo_scores.at_mut(x,y)[color_idx] = StringCombo::AllowedUnscored;
                     }
                 }
             }
@@ -419,8 +415,8 @@ impl StringPath
     
     fn do_intersect(&mut self, combo_a: &(usize, usize), combo_b: &(usize, usize), color_idx : usize) -> bool
     {
-        if matches!(self.combo_scores.at(combo_a.0,combo_a.1)[color_idx], StringCombo::Allowed(_)) &&
-           matches!(self.combo_scores.at(combo_b.0,combo_b.1)[color_idx], StringCombo::Allowed(_))
+        if StringCombo::Banned == self.combo_scores.at(combo_a.0,combo_a.1)[color_idx] ||
+           StringCombo::Banned == self.combo_scores.at(combo_b.0,combo_b.1)[color_idx]
         {
             return false;
         }
@@ -439,7 +435,7 @@ impl StringPath
         match a_b_intersection
         {
             LineIntersection::SinglePoint { intersection: _, is_proper} => {return is_proper},
-            LineIntersection::Collinear { intersection: _} => return true,
+            LineIntersection::Collinear { intersection: _ } => return true,
         }
     }
 
@@ -545,112 +541,6 @@ impl StringPath
                 }
             }
         }
-    }
-
-    pub fn cleaned_path(&self) -> Vec<PathStep>
-    {
-        let mut cur_idxs: Vec<Option<usize>> = vec![None;self.colors.len()];
-        let mut cpath = Vec::<PathStep>::new();
-        for step in self.path.iter()
-        {
-            if cur_idxs[step.color_idx].is_none()
-            {
-                cur_idxs[step.color_idx] = Some(step.from_idx);
-            }
-            let cur_idx = &mut cur_idxs[step.color_idx].unwrap();
-            let d_step = self.pin_distance(step.from_idx, step.to_idx);
-            //If this is an important step, add it to the cleaned path
-            if d_step > 1
-            {
-                cpath.push(*step);
-                *cur_idx = step.to_idx;
-            }
-            //If this is an unimportant step, but it's far enough away from the last important step,
-            //  jump from the last important step to this one
-            else if !matches!(self.combo_scores.at(*cur_idx, step.to_idx)[step.color_idx], StringCombo::Banned)
-            {
-                cpath.push(PathStep { from_idx: *cur_idx, to_idx: step.to_idx, color_idx: step.color_idx, score: 0.});
-                *cur_idx = step.to_idx;
-            }
-        }
-        cpath
-    }
-
-    pub fn write_to_csv(&self, file_path: &str) -> Result<(), Box<dyn Error>>
-    {
-        #[derive(serde::Serialize)]
-        struct row
-        {
-            color_index: usize,
-            pin_index: usize,
-            pin_position_x: f32,
-            pin_position_y: f32,
-            color_r: f32,
-            color_g: f32,
-            color_b: f32,
-            color_name: String
-        }
-        let path = self.path.clone();
-        let mut wtr = Writer::from_path(file_path)?;
-        for step in path
-        {
-            let c_rgb: Srgb = self.colors[step.color_idx].color.into_color();
-            wtr.serialize(row
-            {
-                color_index: step.color_idx,
-                pin_index: step.from_idx,
-                pin_position_x: self.pin_positions[step.from_idx].0,
-                pin_position_y: self.pin_positions[step.from_idx].1,
-                color_r: c_rgb.red,
-                color_g: c_rgb.green,
-                color_b: c_rgb.blue,
-                color_name: get_color_name(&self.colors[step.color_idx].color),
-            })?;
-        }
-        wtr.flush()?;
-        Ok(())
-    }
-
-    pub fn write_to_svg(&self, file_path: &str) -> std::io::Result<()>
-    {
-        let path = self.path.clone();//cleaned_path();
-        let mut document = Document::new()
-            .set("viewBox", (0, 0, self.strings_drawn.width(), self.strings_drawn.height()))
-            .set("style", "background-color:black");
-        for step in path
-        {
-            let from = self.pin_positions[step.from_idx];
-            let to = self.pin_positions[step.to_idx];
-            let c_rgb: Srgb = self.colors[step.color_idx].color.into_color();
-            let c_str = format!("rgb({},{},{})", 
-                (c_rgb.red * 255.) as u8,
-                (c_rgb.green * 255.) as u8,
-                (c_rgb.blue * 255.) as u8);
-            let data = Data::new()
-                .move_to(from)
-                .line_to(to);
-            let path = PathSVG::new()
-                .set("fill", "none")
-                .set("stroke", c_str)
-                .set("stroke-width", 1)
-                .set("d", data);
-            document = document.clone().add(path);
-        }
-        svg::save(file_path, &document)
-    }
-
-    //fn read_from_csv()
-    //{
-    //    let sp = Self::new()
-    //}
-
-    fn pin_distance(&self, pin_a_idx: usize, pin_b_idx: usize) -> usize
-    {
-        let max_pin = pin_a_idx.max(pin_b_idx);
-        let min_pin = pin_a_idx.min(pin_b_idx);
-        let d_left = max_pin - min_pin;
-        let d_right = (self.pin_positions.len() + min_pin) - max_pin;
-        d_left.min(d_right)
     }
 
 }
