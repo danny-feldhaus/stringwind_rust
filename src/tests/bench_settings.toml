@@ -1,6 +1,6 @@
 input_image_path = "src/tests/images/vangogh_small.png"
 output_path = "src/tests/output/"
-path_length = 10000
+path_length = 10
 pin_count = 250
 colors_raw = [
     [0,0,0],
@@ -8,6 +8,6 @@ colors_raw = [
     [175, 141, 0],
     [0, 77, 102],
 ]
-pin_circle_radius = 0.95
-score_radius = 0.8
+pin_circle_radius = 0.9
+score_radius = 0.95
 edge_weight = 0.5

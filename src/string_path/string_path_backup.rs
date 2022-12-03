@@ -226,8 +226,8 @@ impl StringPath
             let step = next_steps[next_color_idx].unwrap();
 
             self.cur_idxs[next_color_idx] = step.to_idx;
-            let from_coord = self.pin_positions[step.from_idx];
-            let to_coord = self.pin_positions[step.to_idx];
+            let from_coord = self.pegs.at(step.from_idx);
+            let to_coord = self.pegs.at(step.to_idx);
             self.strings_drawn.draw_line(from_coord, to_coord, &self.colors[next_color_idx], false);
             self.increment_string_layer(step.from_idx, step.to_idx, step.color_idx);
             self.path.push(step);
@@ -322,8 +322,8 @@ impl StringPath
             StringCombo::Banned => return None,
             StringCombo::AllowedUnscored =>
             {
-                let pin_a = self.pin_positions[pin_combo.0];
-                let pin_b = self.pin_positions[pin_combo.1];
+                let pin_a = self.pegs.at(pin_combo.0);
+                let pin_b = self.pegs.at(pin_combo.1);
                 let line = XiaolinWu::<f32, i32>::new(pin_a, pin_b);
                 let mut score_sum = 0_f32;
                 let mut weight_sum = 0_f32;
@@ -400,8 +400,8 @@ impl StringPath
 
     fn decrease_coverage(&mut self, step: &PathStep)
     {
-        let from_pin = self.pin_positions[step.from_idx];
-        let to_pin = self.pin_positions[step.to_idx];
+        let from_pin = self.pegs.at(step.from_idx);
+        let to_pin = self.pegs.at(step.to_idx);
         let line = XiaolinWu::<f32, i32>::new(from_pin, to_pin);
         for ((x,y), _weight) in line
         {
@@ -421,12 +421,12 @@ impl StringPath
             return false;
         }
 
-        let from_a = self.pin_positions[combo_a.0];
-        let to_a   = self.pin_positions[combo_a.1];
+        let from_a = self.pegs.at(combo_a.0);
+        let to_a   = self.pegs.at(combo_a.1);
         let line_a = Line::new(coord!{x: from_a.0,y: from_a.1}, coord!{x: to_a.0,y: to_a.1});
 
-        let from_b = self.pin_positions[combo_b.0];
-        let to_b   = self.pin_positions[combo_b.1];
+        let from_b = self.pegs.at(combo_b.0);
+        let to_b   = self.pegs.at(combo_b.1);
         let line_b = Line::new(coord!{x: from_b.0,y: from_b.1}, coord!{x: to_b.0,y: to_b.1});
 
         let a_b_intersection = line_intersection(line_a, line_b);
@@ -495,8 +495,8 @@ impl StringPath
             {
                 if lines.at(pin_a_idx,pin_b_idx)[0] != StringCombo::Banned
                 {
-                    let pin_a = pin_positions[pin_a_idx];
-                    let pin_b = pin_positions[pin_b_idx];
+                    let pin_a = pegs.at(pin_a_idx);
+                    let pin_b = pegs.at(pin_b_idx);
                     let line = XiaolinWu::<f32, i32>::new(pin_a,pin_b);
                     for ((x,y), _weight) in line
                     {
@@ -516,8 +516,8 @@ impl StringPath
 
     fn increment_string_layer(&mut self, pin_a_idx: usize, pin_b_idx: usize, color_idx: usize)
     {
-        let pin_a = self.pin_positions[pin_a_idx];
-        let pin_b = self.pin_positions[pin_b_idx];
+        let pin_a = self.pegs.at(pin_a_idx);
+        let pin_b = self.pegs.at(pin_b_idx);
 
         for (idx, layers) in self.string_layers.iter_mut().enumerate()
         {

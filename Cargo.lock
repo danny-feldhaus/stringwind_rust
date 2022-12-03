@@ -2230,6 +2230,7 @@ dependencies = [
  "serde",
  "show-image",
  "svg",
+ "toml",
 ]
 
 [[package]]

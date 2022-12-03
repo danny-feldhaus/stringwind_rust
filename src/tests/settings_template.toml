@@ -1,0 +1,13 @@
+input_image_path = ""
+output_path = ""
+path_length = 0
+pin_count = 0
+colors_raw = []
+pin_circle_radius = 0.0
+score_radius = 0.0
+edge_weight = 0.0
+path = []
+pin_positions = []
+cur_step = 0
+cur_idxs = []
+cur_scores = []
